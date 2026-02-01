@@ -64,13 +64,5 @@ async def ingest(data: dict):
     conn.commit()
     return {"status": "ok"}
 
-@app.get("/register_device")
-async def register_device():
-    cursor.execute("""
-        INSERT OR IGNORE INTO devices (device_uid, api_key)
-        VALUES ('home', '11111')
-    """)
-    conn.commit()
-    return {"status": "device registered"}
 
 
