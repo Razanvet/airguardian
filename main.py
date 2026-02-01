@@ -1,93 +1,72 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
+from pydantic import BaseModel
 import sqlite3
+from datetime import datetime
 
 app = FastAPI()
 
-# ===== DATABASE =====
+# ===== БАЗА ДАННЫХ =====
 conn = sqlite3.connect("data.db", check_same_thread=False)
 cursor = conn.cursor()
 
-# ===== TABLES =====
+# ===== ТАБЛИЦЫ =====
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS devices (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    device_uid TEXT UNIQUE NOT NULL,
-    api_key TEXT NOT NULL
+    device_uid TEXT PRIMARY KEY,
+    api_key TEXT
 )
 """)
 
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS measurements (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    device_id INTEGER NOT NULL,
+    device_uid TEXT,
     co2 INTEGER,
     temperature REAL,
     humidity REAL,
     pressure REAL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (device_id) REFERENCES devices(id)
+    timestamp TEXT
 )
 """)
 
 conn.commit()
 
-# ===== API =====
+# ===== МОДЕЛЬ ДАННЫХ =====
+class IngestData(BaseModel):
+    device_uid: str
+    api_key: str
+    co2: int
+    temperature: float
+    humidity: float
+    pressure: float
+
+# ===== INGEST ENDPOINT =====
 @app.post("/ingest")
-async def ingest(data: dict):
+async def ingest(data: IngestData):
 
-    required = ["device_uid", "api_key", "co2", "temperature", "humidity", "pressure"]
-    for key in required:
-        if key not in data:
-            raise HTTPException(400, f"Missing {key}")
+    # 🔹 АВТО-РЕГИСТРАЦИЯ УСТРОЙСТВА
+    cursor.execute("""
+        INSERT OR IGNORE INTO devices (device_uid, api_key)
+        VALUES (?, ?)
+    """, (data.device_uid, data.api_key))
 
-    cursor.execute(
-        "SELECT id FROM devices WHERE device_uid=? AND api_key=?",
-        (data["device_uid"], data["api_key"])
-    )
-    row = cursor.fetchone()
-
-    if not row:
-        raise HTTPException(403, "Invalid device")
-
+    # 🔹 СОХРАНЕНИЕ ИЗМЕРЕНИЙ
     cursor.execute("""
         INSERT INTO measurements
-        (device_id, co2, temperature, humidity, pressure)
-        VALUES (?, ?, ?, ?, ?)
+        (device_uid, co2, temperature, humidity, pressure, timestamp)
+        VALUES (?, ?, ?, ?, ?, ?)
     """, (
-        row[0],
-        data["co2"],
-        data["temperature"],
-        data["humidity"],
-        data["pressure"]
+        data.device_uid,
+        data.co2,
+        data.temperature,
+        data.humidity,
+        data.pressure,
+        datetime.utcnow().isoformat()
     ))
 
     conn.commit()
-    return {"status": "ok"}
 
-@app.get("/debug/devices")
-async def debug_devices():
-    cursor.execute("SELECT * FROM devices")
-    rows = cursor.fetchall()
     return {
-        "devices": [
-            {"device_uid": r[0], "api_key": r[1]}
-            for r in rows
-        ]
+        "status": "ok",
+        "device_uid": data.device_uid
     }
-
-@app.get("/debug/add_device")
-async def add_device(
-    device_uid: str,
-    api_key: str
-):
-    cursor.execute(
-        "INSERT OR IGNORE INTO devices VALUES (?, ?)",
-        (device_uid, api_key)
-    )
-    conn.commit()
-    return {
-        "status": "added",
-        "device_uid": device_uid
-    }
-
-
