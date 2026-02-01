@@ -75,4 +75,19 @@ async def debug_devices():
         ]
     }
 
+@app.get("/debug/add_device")
+async def add_device(
+    device_uid: str,
+    api_key: str
+):
+    cursor.execute(
+        "INSERT OR IGNORE INTO devices VALUES (?, ?)",
+        (device_uid, api_key)
+    )
+    conn.commit()
+    return {
+        "status": "added",
+        "device_uid": device_uid
+    }
+
 
