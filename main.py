@@ -64,5 +64,15 @@ async def ingest(data: dict):
     conn.commit()
     return {"status": "ok"}
 
+@app.get("/debug/devices")
+async def debug_devices():
+    cursor.execute("SELECT * FROM devices")
+    rows = cursor.fetchall()
+    return {
+        "devices": [
+            {"device_uid": r[0], "api_key": r[1]}
+            for r in rows
+        ]
+    }
 
 
