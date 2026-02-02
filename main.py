@@ -70,3 +70,26 @@ async def ingest(data: IngestData):
         "status": "ok",
         "device_uid": data.device_uid
     }
+
+@app.get("/data")
+def get_data(limit: int = 20):
+    cursor.execute("""
+        SELECT device_uid, co2, temperature, humidity, pressure, timestamp
+        FROM measurements
+        ORDER BY id DESC
+        LIMIT ?
+    """, (limit,))
+
+    rows = cursor.fetchall()
+
+    return [
+        {
+            "device_uid": r[0],
+            "co2": r[1],
+            "temperature": r[2],
+            "humidity": r[3],
+            "pressure": r[3],
+            "timestamp": r[5]
+        }
+        for r in rows
+    ]
