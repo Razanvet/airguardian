@@ -17,7 +17,9 @@ CREATE TABLE IF NOT EXISTS devices (
     device_uid TEXT PRIMARY KEY,
     api_key TEXT,
     tg_message_id INTEGER
-);
+)
+""")
+
 
 
 cursor.execute("""
@@ -141,5 +143,6 @@ def get_data(limit: int = 20):
         }
         for r in rows
     ]
+
 
 
