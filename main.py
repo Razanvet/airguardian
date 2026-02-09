@@ -3,7 +3,7 @@ from pydantic import BaseModel
 import sqlite3
 from datetime import datetime
 
-from bot import send_alert  # импорт бота
+from bot import send_or_update_message  # импорт бота
 
 app = FastAPI()
 
@@ -15,9 +15,10 @@ cursor = conn.cursor()
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS devices (
     device_uid TEXT PRIMARY KEY,
-    api_key TEXT
-)
-""")
+    api_key TEXT,
+    tg_message_id INTEGER
+);
+
 
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS measurements (
@@ -50,14 +51,15 @@ class IngestData(BaseModel):
 @app.post("/ingest")
 async def ingest(data: IngestData):
 
-    # 🔹 Авто-регистрация устройства
+    timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+
+    # --- регистрация устройства ---
     cursor.execute("""
         INSERT OR IGNORE INTO devices (device_uid, api_key)
         VALUES (?, ?)
     """, (data.device_uid, data.api_key))
 
-    # 🔹 Сохранение измерений
-    timestamp = datetime.utcnow().isoformat()
+    # --- сохранение измерений ---
     cursor.execute("""
         INSERT INTO measurements
         (device_uid, co2, temperature, humidity, timestamp)
@@ -71,39 +73,52 @@ async def ingest(data: IngestData):
     ))
     conn.commit()
 
-    # 🔹 Проверка порогов
+    # --- проверка порогов ---
     alerts = []
 
-    # --- CO2 ---
-    if data.co2 < LIMITS["co2"]["min"]:
-        alerts.append(f"🔻 CO₂ слишком низкий: {data.co2} ppm")
-    elif data.co2 > LIMITS["co2"]["max"]:
-        alerts.append(f"🔺 CO₂ слишком высокий: {data.co2} ppm")
+    if data.co2 < LIMITS["co2"]["min"] or data.co2 > LIMITS["co2"]["max"]:
+        alerts.append(f"CO₂: {data.co2} ppm")
 
-    # --- Temperature ---
-    if data.temperature < LIMITS["temperature"]["min"]:
-        alerts.append(f"❄ Температура слишком низкая: {data.temperature} °C")
-    elif data.temperature > LIMITS["temperature"]["max"]:
-        alerts.append(f"🔥 Температура слишком высокая: {data.temperature} °C")
+    if data.temperature < LIMITS["temperature"]["min"] or data.temperature > LIMITS["temperature"]["max"]:
+        alerts.append(f"🌡 Температура: {data.temperature} °C")
 
-    # --- Humidity ---
-    if data.humidity < LIMITS["humidity"]["min"]:
-        alerts.append(f"🌵 Влажность слишком низкая: {data.humidity} %")
-    elif data.humidity > LIMITS["humidity"]["max"]:
-        alerts.append(f"💧 Влажность слишком высокая: {data.humidity} %")
+    if data.humidity < LIMITS["humidity"]["min"] or data.humidity > LIMITS["humidity"]["max"]:
+        alerts.append(f"💧 Влажность: {data.humidity} %")
 
-    # 🔹 Отправка в Telegram (async/await)
+    status_icon = "🚨" if alerts else "🟢"
+
+    text = (
+        f"{status_icon} *Состояние кабинета*\n"
+        f"Кабинет: `{data.device_uid}`\n"
+        f"Время: {timestamp}\n\n"
+        f"*Данные:*\n"
+        f"CO₂: {data.co2} ppm\n"
+        f"Температура: {data.temperature} °C\n"
+        f"Влажность: {data.humidity} %\n"
+    )
+
     if alerts:
-        message = (
-            f"🚨 *ОТКЛОНЕНИЕ ОТ НОРМЫ*\n"
-            f"Кабинет: {data.device_uid}\n"
-            f"Время измерения (UTC): {timestamp}\n\n"
-            + "\n".join(alerts)
-        )
-        await send_alert(message)  # await гарантирует выполнение
+        text += "\n⚠ *Отклонения:*\n" + "\n".join(alerts)
 
-    return {"status": "ok", "device_uid": data.device_uid, "timestamp": timestamp}
+    # --- получаем message_id ---
+    cursor.execute(
+        "SELECT tg_message_id FROM devices WHERE device_uid=?",
+        (data.device_uid,)
+    )
+    row = cursor.fetchone()
+    message_id = row[0] if row else None
 
+    # --- отправка / обновление ---
+    new_message_id = await send_or_update_message(text, message_id)
+
+    # --- сохраняем message_id ---
+    cursor.execute("""
+        UPDATE devices SET tg_message_id=?
+        WHERE device_uid=?
+    """, (new_message_id, data.device_uid))
+    conn.commit()
+
+    return {"status": "ok"}
 
 @app.get("/data")
 def get_data(limit: int = 20):
@@ -126,4 +141,5 @@ def get_data(limit: int = 20):
         }
         for r in rows
     ]
+
 
