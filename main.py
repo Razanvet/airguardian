@@ -1,9 +1,9 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from bot import send_or_update_message  # импорт бота
+from bot import send_or_update_message
 
 app = FastAPI()
 
@@ -19,8 +19,6 @@ CREATE TABLE IF NOT EXISTS devices (
     tg_message_id INTEGER
 )
 """)
-
-
 
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS measurements (
@@ -49,11 +47,17 @@ class IngestData(BaseModel):
     temperature: float
     humidity: float
 
+# ===== ВСПОМОГАТЕЛЬНО =====
+def mark(value, limits):
+    return " ❗" if value < limits["min"] or value > limits["max"] else ""
+
 # ===== Эндпоинт /ingest =====
 @app.post("/ingest")
 async def ingest(data: IngestData):
 
-    timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+    # ⏰ Время по МСК
+    timestamp = (datetime.utcnow() + timedelta(hours=3)) \
+        .strftime("%d.%m.%Y %H:%M (МСК)")
 
     # --- регистрация устройства ---
     cursor.execute("""
@@ -75,32 +79,24 @@ async def ingest(data: IngestData):
     ))
     conn.commit()
 
-    # --- проверка порогов ---
-    alerts = []
+    # --- пометки ❗ ---
+    co2_mark  = mark(data.co2, LIMITS["co2"])
+    temp_mark = mark(data.temperature, LIMITS["temperature"])
+    hum_mark  = mark(data.humidity, LIMITS["humidity"])
 
-    if data.co2 < LIMITS["co2"]["min"] or data.co2 > LIMITS["co2"]["max"]:
-        alerts.append(f"CO₂: {data.co2} ppm")
+    has_alerts = co2_mark or temp_mark or hum_mark
+    status_icon = "🚨" if has_alerts else "🟢"
 
-    if data.temperature < LIMITS["temperature"]["min"] or data.temperature > LIMITS["temperature"]["max"]:
-        alerts.append(f"🌡 Температура: {data.temperature} °C")
-
-    if data.humidity < LIMITS["humidity"]["min"] or data.humidity > LIMITS["humidity"]["max"]:
-        alerts.append(f"💧 Влажность: {data.humidity} %")
-
-    status_icon = "🚨" if alerts else "🟢"
-
+    # --- текст сообщения ---
     text = (
         f"{status_icon} *Состояние кабинета*\n"
-        f"Кабинет: `{data.device_uid}`\n"
-        f"Время: {timestamp}\n\n"
-        f"*Данные:*\n"
-        f"CO₂: {data.co2} ppm\n"
-        f"Температура: {data.temperature} °C\n"
-        f"Влажность: {data.humidity} %\n"
+        f"🏫 Кабинет: `{data.device_uid}`\n"
+        f"🕒 Время: {timestamp}\n\n"
+        f"*Показания:*\n"
+        f"CO₂: {data.co2} ppm{co2_mark}\n"
+        f"🌡 Температура: {data.temperature} °C{temp_mark}\n"
+        f"💧 Влажность: {data.humidity} %{hum_mark}"
     )
-
-    if alerts:
-        text += "\n⚠ *Отклонения:*\n" + "\n".join(alerts)
 
     # --- получаем message_id ---
     cursor.execute(
@@ -122,10 +118,11 @@ async def ingest(data: IngestData):
 
     return {"status": "ok"}
 
+# ===== Просмотр данных =====
 @app.get("/data")
 def get_data(limit: int = 20):
     cursor.execute("""
-        SELECT device_uid, co2, temperature, humidity, pressure, timestamp
+        SELECT device_uid, co2, temperature, humidity, timestamp
         FROM measurements
         ORDER BY id DESC
         LIMIT ?
@@ -139,10 +136,7 @@ def get_data(limit: int = 20):
             "co2": r[1],
             "temperature": r[2],
             "humidity": r[3],
-            "timestamp": r[5]
+            "timestamp": r[4]
         }
         for r in rows
     ]
-
-
-
