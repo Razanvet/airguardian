@@ -6,7 +6,7 @@ from aiogram.exceptions import TelegramAPIError
 
 
 # ===== Настройки бота =====
-TELEGRAM_TOKEN = "<YOUR_TELEGRAM_BOT_TOKEN>"
+TELEGRAM_TOKEN = "8552290162:AAGHM0pmC6BuCjE4NlTqG0N3pIGNZ4r4lCc"
 
 bot = Bot(token=TELEGRAM_TOKEN, parse_mode="Markdown")
 
@@ -21,18 +21,14 @@ LIMITS = {
     "humidity": {"min": 30, "max": 70}
 }
 
-async def send_or_update_message(text: str, message_id: int = None) -> int:
-    """Отправка нового сообщения или обновление существующего."""
-    chat_id = "<YOUR_CHAT_ID>"  # сюда вставьте ваш chat_id
+async def send_or_update_message(text: str, message_id: int | None = None) -> int:
+    chat_id = "1200659505" 
     try:
         if message_id:
             try:
                 await bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=text)
                 return message_id
-            except MessageNotModified:
-                return message_id  # если текст не изменился
-            except Exception:
-                # Если редактировать не удалось — создаём новое сообщение
+            except TelegramAPIError:
                 msg = await bot.send_message(chat_id=chat_id, text=text)
                 return msg.message_id
         else:
@@ -41,14 +37,11 @@ async def send_or_update_message(text: str, message_id: int = None) -> int:
     except Exception as e:
         print("Telegram send error:", e)
         return message_id or 0
-
 async def check_all_devices():
-    """Проходим по всем устройствам и обновляем сообщения."""
     cursor.execute("SELECT device_uid, tg_message_id FROM devices")
     devices = cursor.fetchall()
 
     for device_uid, message_id in devices:
-        # Берём последнее измерение
         cursor.execute("""
             SELECT co2, temperature, humidity, timestamp
             FROM measurements
@@ -98,5 +91,6 @@ async def main_loop():
 
 if __name__ == "__main__":
     asyncio.run(main_loop())
+
 
 
