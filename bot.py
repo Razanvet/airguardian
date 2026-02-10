@@ -1,14 +1,18 @@
 import sqlite3
 import asyncio
-from aiogram import Bot, types
+from aiogram import Bot
+from aiogram.client.bot import DefaultBotProperties
 from aiogram.exceptions import TelegramAPIError
-
-
 
 # ===== Настройки бота =====
 TELEGRAM_TOKEN = "8552290162:AAGHM0pmC6BuCjE4NlTqG0N3pIGNZ4r4lCc"
+CHAT_ID = "1200659505"  # ваш chat_id
 
-bot = Bot(token=TELEGRAM_TOKEN, parse_mode="Markdown")
+# ===== Инициализация бота =====
+bot = Bot(
+    token=TELEGRAM_TOKEN,
+    default=DefaultBotProperties(parse_mode="Markdown")  # теперь parse_mode задается так
+)
 
 # ===== База данных =====
 conn = sqlite3.connect("data.db", check_same_thread=False)
@@ -21,22 +25,24 @@ LIMITS = {
     "humidity": {"min": 30, "max": 70}
 }
 
+# ===== Функция отправки или обновления сообщений =====
 async def send_or_update_message(text: str, message_id: int | None = None) -> int:
-    chat_id = "1200659505" 
     try:
         if message_id:
             try:
-                await bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=text)
+                await bot.edit_message_text(chat_id=CHAT_ID, message_id=message_id, text=text)
                 return message_id
             except TelegramAPIError:
-                msg = await bot.send_message(chat_id=chat_id, text=text)
+                msg = await bot.send_message(chat_id=CHAT_ID, text=text)
                 return msg.message_id
         else:
-            msg = await bot.send_message(chat_id=chat_id, text=text)
+            msg = await bot.send_message(chat_id=CHAT_ID, text=text)
             return msg.message_id
     except Exception as e:
         print("Telegram send error:", e)
         return message_id or 0
+
+# ===== Проверка всех устройств =====
 async def check_all_devices():
     cursor.execute("SELECT device_uid, tg_message_id FROM devices")
     devices = cursor.fetchall()
@@ -84,13 +90,12 @@ async def check_all_devices():
         cursor.execute("UPDATE devices SET tg_message_id=? WHERE device_uid=?", (new_message_id, device_uid))
         conn.commit()
 
+# ===== Главный цикл =====
 async def main_loop():
     while True:
         await check_all_devices()
         await asyncio.sleep(60)  # проверка каждые 60 секунд
 
+# ===== Запуск =====
 if __name__ == "__main__":
     asyncio.run(main_loop())
-
-
-
