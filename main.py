@@ -39,6 +39,32 @@ class IngestData(BaseModel):
     temperature: float
     humidity: float
 
+
+
+
+@app.get("/debug/measurements/all")
+def debug_measurements_all():
+    try:
+        cursor.execute("SELECT * FROM measurements ORDER BY id ASC")
+        rows = cursor.fetchall()
+        # Преобразуем в список словарей для удобного просмотра
+        result = [
+            {
+                "id": row[0],
+                "device_uid": row[1],
+                "co2": row[2],
+                "temperature": row[3],
+                "humidity": row[4],
+                "timestamp": row[5]
+            }
+            for row in rows
+        ]
+        return {"rows": result, "count": len(result)}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+
 # ===== Эндпоинт приёма данных =====
 @app.post("/ingest")
 async def ingest(data: IngestData):
@@ -66,3 +92,4 @@ async def ingest(data: IngestData):
     conn.commit()
 
     return {"status": "ok"}
+
