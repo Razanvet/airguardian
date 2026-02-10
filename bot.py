@@ -1,8 +1,6 @@
 import sqlite3
 import asyncio
-import requests
 import math
-from datetime import datetime
 from aiogram import Bot
 from aiogram.client.bot import DefaultBotProperties
 from aiogram.exceptions import TelegramAPIError
@@ -11,6 +9,7 @@ from aiogram.exceptions import TelegramAPIError
 TELEGRAM_TOKEN = "8552290162:AAGHM0pmC6BuCjE4NlTqG0N3pIGNZ4r4lCc"
 CHAT_ID = "1200659505"
 
+# ===== Инициализация бота =====
 bot = Bot(
     token=TELEGRAM_TOKEN,
     default=DefaultBotProperties(parse_mode="Markdown")
@@ -22,23 +21,34 @@ cursor = conn.cursor()
 
 # ===== Пороговые значения =====
 LIMITS = {
-    "co2": {"min": 400, "max": 1200},
+    "co2": {"min": 400, "max": 1000},
     "temperature": {"min": 18, "max": 27},
     "humidity": {"min": 30, "max": 70}
 }
 
-# ===== Параметры пространства =====
-CLASS_VOLUME = 8 * 6 * 3      # объем помещения (м³)
-NUM_WINDOWS = 4
-WINDOW_WIDTH = 1.5
-WINDOW_OPEN = 0.08
-C_D = 0.6
-CO2_GEN = 0.005               # м³/ч на человека
-OUTSIDE_CO2 = 400
-MAX_CO2 = 1000
-NUM_PEOPLE = 20
+# ===== Параметры класса =====
+L, W, H = 8.0, 6.0, 3.0
+V = L * W * H
+N = 20
 
-# ===== Функция отправки/обновления сообщений =====
+# ===== Окна =====
+num_windows = 4
+W_win, H_win = 1.5, 1.2
+h_open = 0.08
+C_d = 0.6
+
+# ===== Внешние условия =====
+T_out = -5   # температура на улице
+v_wind = 3   # скорость ветра м/с
+RH_out = 50  # наружная влажность %
+
+# ===== Радиаторы =====
+P_rad = 2000   # Вт
+rho_air = 1.2  # кг/м³
+C_rad = 0.6
+T_battery = 35  # температура батареи
+
+# ===== Функция отправки или обновления сообщений =====
 async def send_or_update_message(text: str, message_id: int | None = None) -> int:
     try:
         if message_id:
@@ -55,42 +65,43 @@ async def send_or_update_message(text: str, message_id: int | None = None) -> in
         print("Telegram send error:", e)
         return message_id or 0
 
-# ===== Получаем погоду (температура и ветер) =====
-def get_weather():
-    YANDEX_KEY = "<YOUR_YANDEX_WEATHER_KEY>"  # вставь свой ключ
-    lat, lon = 59.12, 51.93  # Координаты Кирово‑Чепецка
-    try:
-        url = "https://api.weather.yandex.ru/v2/forecast"
-        params = {"lat": lat, "lon": lon, "extra": "true"}
-        headers = {"X-Yandex-Weather-Key": YANDEX_KEY}
-        resp = requests.get(url, headers=headers, params=params, timeout=5).json()
-        fact = resp.get("fact", {})
-        temp_out = fact.get("temp", 0)
-        wind_speed = fact.get("wind_speed", 0)  # скорость ветра, м/с :contentReference[oaicite:1]{index=1}
-        return {"temp": temp_out, "wind": wind_speed}
-    except Exception as e:
-        print("Error getting weather:", e)
-        return {"temp": 0, "wind": 0}
+# ===== Расчёт времени до нормализации =====
+def calculate_recovery_times(co2, temp, hum):
+    # ----- Реальный поток с вентиляцией и отоплением -----
+    delta_T = temp - T_out
+    T_avg = (temp + T_out)/2 + 273.15
+    v_stack = math.sqrt(2 * 9.81 * H_win * (delta_T / T_avg))
+    v_rad = C_rad * (P_rad / (rho_air * V))**(1/3)
+    v_eff = math.sqrt(v_stack**2 + v_wind**2 + v_rad**2)
 
-# ===== Расчёт времени микропроветривания =====
-def calculate_ventilation(temp_in, temp_out, wind_speed):
-    delta_T = temp_in - temp_out
-    A_open = WINDOW_WIDTH * WINDOW_OPEN
-    g = 9.81
+    A_open = W_win * h_open
+    Q_per_window = C_d * A_open * v_eff
+    Q_window = Q_per_window * num_windows * 3600  # м³/ч
 
-    # поток воздуха учитывая разность температур и ветер
-    Q_per = C_D * A_open * math.sqrt(2 * g * delta_T / (temp_in + 273.15) + wind_speed**2)
-    Q_all = Q_per * NUM_WINDOWS
+    # ----- Время по CO2 -----
+    C_current = co2
+    C_max = LIMITS["co2"]["max"]
+    C_outside = LIMITS["co2"]["min"]  # для расчета
+    G = N * 0.005  # генерация CO2 на человека
+    Q_CO2 = G / ((C_max - C_outside) * 1e-6)
+    t_CO2_h = - (V / Q_window) * math.log((C_max - C_outside)/(C_current - C_outside))
 
-    # необходимый поток для CO2
-    G = NUM_PEOPLE * CO2_GEN
-    Q_needed = G / ((MAX_CO2 - OUTSIDE_CO2) * 1e-6)
+    # ----- Время по температуре -----
+    T_min = LIMITS["temperature"]["min"]
+    # Простая модель отопления + вентиляция
+    t_temp_h = - (V / Q_window) * math.log((T_min - T_out)/(temp - T_out))
 
-    time_h = CLASS_VOLUME / max(Q_all, 1)  # ч
-    time_min = time_h * 60
-    return round(time_min)
+    # ----- Время по влажности -----
+    RH_min = LIMITS["humidity"]["min"]
+    RH_in = hum
+    t_rh_h = - (V / Q_window) * math.log((RH_min - RH_out)/(RH_in - RH_out))
 
-# ===== Проверка устройств =====
+    # ----- Предельное время -----
+    t_vent_h = min(t_CO2_h, t_temp_h, t_rh_h)
+    t_vent_min = t_vent_h * 60
+    return Q_window, Q_CO2, t_vent_min
+
+# ===== Проверка всех устройств =====
 async def check_all_devices():
     cursor.execute("SELECT device_uid, tg_message_id FROM devices")
     devices = cursor.fetchall()
@@ -108,37 +119,23 @@ async def check_all_devices():
             continue
 
         co2, temp, hum, ts = row
-        weather = get_weather()
-        temp_out = weather["temp"]
-        wind_speed = weather["wind"]
+        Q_window, Q_CO2, t_vent_min = calculate_recovery_times(co2, temp, hum)
 
-        vent_time = calculate_ventilation(temp, temp_out, wind_speed)
-
-        alerts = []
-        if co2 < LIMITS["co2"]["min"] or co2 > LIMITS["co2"]["max"]:
-            alerts.append(f"❗ CO₂: {co2} ppm")
-        if temp < LIMITS["temperature"]["min"] or temp > LIMITS["temperature"]["max"]:
-            alerts.append(f"❗ 🌡 Температура: {temp:.1f} °C")
-        if hum < LIMITS["humidity"]["min"] or hum > LIMITS["humidity"]["max"]:
-            alerts.append(f"❗ 💧 Влажность: {hum:.1f} %")
-
-        status_icon = "🚨" if alerts else "🟢"
+        # ----- Формируем текст -----
         text = (
-            f"{status_icon} *Состояние кабинета*\n"
+            f"🟢 *Состояние кабинета*\n"
             f"Кабинет: `{device_uid}`\n"
             f"Время: {ts}\n\n"
             f"*Данные:*\n"
-            f"CO₂: {co2} ppm\n"
-            f"Температура: {temp:.1f} °C\n"
-            f"Влажность: {hum:.1f} %\n\n"
-            f"🌦️ Температура на улице: {temp_out} °C\n"
-            f"💨 Скорость ветра: {wind_speed} м/с\n"
-            f"⏱ Время проветривания: ~{vent_time} мин\n"
+            f"CO₂: {co2} ppm{' ❗' if co2 > LIMITS['co2']['max'] else ''}\n"
+            f"Температура: {temp:.1f} °C{' ❗' if temp < LIMITS['temperature']['min'] else ''}\n"
+            f"Влажность: {hum:.1f} %{' ❗' if hum < LIMITS['humidity']['min'] else ''}\n\n"
+            f"Реальный поток вентиляции: {Q_window:.1f} м³/ч\n"
+            f"Необходимый поток: {Q_CO2:.1f} м³/ч\n"
+            f"Время до нормализации: {t_vent_min:.0f} мин"
         )
 
-        if alerts:
-            text += "\n⚠ Отклонения:\n" + "\n".join(alerts)
-
+        # ----- Отправка или обновление -----
         new_message_id = await send_or_update_message(text, message_id)
         cursor.execute("UPDATE devices SET tg_message_id=? WHERE device_uid=?", (new_message_id, device_uid))
         conn.commit()
@@ -149,5 +146,6 @@ async def main_loop():
         await check_all_devices()
         await asyncio.sleep(60)
 
+# ===== Запуск =====
 if __name__ == "__main__":
     asyncio.run(main_loop())
