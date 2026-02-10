@@ -1,7 +1,8 @@
 import sqlite3
 import asyncio
 from aiogram import Bot, types
-from aiogram.exceptions import MessageNotModified
+from aiogram.exceptions import TelegramAPIError
+
 
 
 # ===== Настройки бота =====
@@ -97,4 +98,5 @@ async def main_loop():
 
 if __name__ == "__main__":
     asyncio.run(main_loop())
+
 
