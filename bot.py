@@ -1,7 +1,8 @@
 import sqlite3
 import asyncio
 from aiogram import Bot, types
-from aiogram.utils.exceptions import MessageNotModified
+from aiogram.exceptions import MessageNotModified
+
 
 # ===== Настройки бота =====
 TELEGRAM_TOKEN = "<YOUR_TELEGRAM_BOT_TOKEN>"
@@ -96,3 +97,4 @@ async def main_loop():
 
 if __name__ == "__main__":
     asyncio.run(main_loop())
+
