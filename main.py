@@ -4,10 +4,6 @@ import sqlite3
 from datetime import datetime, timedelta
 from bot import loop  # импортируем функцию цикла из bot.py
 import asyncio
-@app.on_event("startup")
-async def start_bot():
-    asyncio.create_task(loop())
-
 
 app = FastAPI()
 
@@ -46,6 +42,11 @@ class IngestData(BaseModel):
     humidity: float
 
 
+
+
+@app.on_event("startup")
+async def start_bot():
+    asyncio.create_task(loop())
 
 
 @app.get("/debug/measurements/all")
@@ -98,5 +99,6 @@ async def ingest(data: IngestData):
     conn.commit()
 
     return {"status": "ok"}
+
 
 
