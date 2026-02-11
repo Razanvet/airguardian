@@ -42,15 +42,22 @@ async def send_or_update_message(text, msg_id):
     try:
         if msg_id:
             try:
-                await bot.edit_message_text(text, CHAT_ID, msg_id)
+                await bot.edit_message_text(
+                    chat_id=CHAT_ID,
+                    message_id=msg_id,
+                    text=text
+                )
                 return msg_id
-            except TelegramAPIError:
-                msg = await bot.send_message(CHAT_ID, text)
-                return msg.message_id
+            except TelegramAPIError as e:
+                print("Edit error:", e)
+
         msg = await bot.send_message(CHAT_ID, text)
         return msg.message_id
-    except:
-        return msg_id or 0
+
+    except Exception as e:
+        print("Send error:", e)
+        return msg_id
+
 
 # ===== Расчёт =====
 def calc_time(co2, temp, hum):
@@ -104,3 +111,4 @@ async def loop():
 
 if __name__ == "__main__":
     asyncio.run(loop())
+
