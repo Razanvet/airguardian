@@ -2,6 +2,12 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import sqlite3
 from datetime import datetime, timedelta
+from bot import loop  # импортируем функцию цикла из bot.py
+import asyncio
+@app.on_event("startup")
+async def start_bot():
+    asyncio.create_task(loop())
+
 
 app = FastAPI()
 
@@ -92,4 +98,5 @@ async def ingest(data: IngestData):
     conn.commit()
 
     return {"status": "ok"}
+
 
