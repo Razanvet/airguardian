@@ -38,8 +38,9 @@ C_rad = 0.6
 
 
 # ===== Telegram =====
-async def send_or_update_message(text, msg_id):
+async def send_or_update_message(text: str, msg_id: int | None, uid: str):
     try:
+        # Если сообщение уже существует — пробуем редактировать
         if msg_id:
             try:
                 await bot.edit_message_text(
@@ -49,9 +50,18 @@ async def send_or_update_message(text, msg_id):
                 )
                 return msg_id
             except TelegramAPIError:
-                pass
+                print(f"⚠ Не удалось отредактировать сообщение {msg_id}, создаём новое")
 
+        # Если нет msg_id или редактирование не удалось — создаём новое
         msg = await bot.send_message(CHAT_ID, text)
+
+        # Сохраняем новый message_id в БД
+        cursor.execute(
+            "UPDATE devices SET tg_message_id=? WHERE device_uid=?",
+            (msg.message_id, uid)
+        )
+        conn.commit()
+
         return msg.message_id
 
     except Exception as e:
@@ -87,7 +97,7 @@ def calc_time(co2, temp, hum):
     return Q, t_min
 
 
-# ===== Цикл =====
+# ===== Основной цикл =====
 async def loop():
     while True:
         try:
@@ -103,7 +113,9 @@ async def loop():
                 )
             """)
 
-            for uid, msg_id, co2, temp, hum, ts in cursor.fetchall():
+            rows = cursor.fetchall()
+
+            for uid, msg_id, co2, temp, hum, ts in rows:
                 Q, t = calc_time(co2, temp, hum)
 
                 status = "✅ Параметры в норме" if t == 0 else f"⏳ До нормы: {t:.0f} мин"
@@ -119,12 +131,8 @@ async def loop():
                     f"{status}"
                 )
 
-                new_id = await send_or_update_message(text, msg_id)
-
-                cursor.execute(
-                    "UPDATE devices SET tg_message_id=? WHERE device_uid=?",
-                    (new_id, uid)
-                )
+                # ⚡ теперь редактируем сообщение, а не создаём новое
+                await send_or_update_message(text, msg_id, uid)
 
             conn.commit()
 
@@ -134,5 +142,14 @@ async def loop():
         await asyncio.sleep(60)
 
 
+# ===== Запуск =====
+async def main():
+    try:
+        await loop()
+    finally:
+        await bot.session.close()
+        conn.close()
+
+
 if __name__ == "__main__":
-    asyncio.run(loop())
+    asyncio.run(main())
