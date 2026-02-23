@@ -20,27 +20,30 @@ cursor = conn.cursor()
 
 # ===== Параметры =====
 LIMITS = {"co2": 1000, "temperature": 18, "humidity": 30}
-
 L, W, H = 8, 6, 3
 V = L * W * H
-
 num_windows = 4
 W_win, H_win = 1.5, 1.2
 h_open = 0.08
 C_d = 0.6
-
 T_out = -5
 v_wind = 3
-
 P_rad = 2000
 rho_air = 1.2
 C_rad = 0.6
 
+# ===== Храним последний отправленный measurement id для каждого устройства =====
+last_sent_id = {}
 
 # ===== Telegram =====
-async def send_or_update_message(text: str, msg_id: int | None, uid: str):
+async def send_or_update_message(text: str, uid: str):
     try:
-        # Если сообщение уже существует — пробуем редактировать
+        # Берём текущее message_id из БД
+        cursor.execute("SELECT tg_message_id FROM devices WHERE device_uid=?", (uid,))
+        row = cursor.fetchone()
+        msg_id = row[0] if row else None
+
+        # Если сообщение существует — пробуем редактировать
         if msg_id:
             try:
                 await bot.edit_message_text(
@@ -52,7 +55,7 @@ async def send_or_update_message(text: str, msg_id: int | None, uid: str):
             except TelegramAPIError:
                 print(f"⚠ Не удалось отредактировать сообщение {msg_id}, создаём новое")
 
-        # Если нет msg_id или редактирование не удалось — создаём новое
+        # Иначе создаём новое сообщение
         msg = await bot.send_message(CHAT_ID, text)
 
         # Сохраняем новый message_id в БД
@@ -61,23 +64,19 @@ async def send_or_update_message(text: str, msg_id: int | None, uid: str):
             (msg.message_id, uid)
         )
         conn.commit()
-
         return msg.message_id
 
     except Exception as e:
         print("Telegram error:", e)
-        return msg_id
-
+        return None
 
 # ===== Расчёт =====
 def calc_time(co2, temp, hum):
     delta_T = temp - T_out
     T_avg = (temp + T_out) / 2 + 273.15
-
     v_stack = math.sqrt(2 * 9.81 * H_win * abs(delta_T) / T_avg) if T_avg > 0 else 0
     v_rad = C_rad * (P_rad / (rho_air * V)) ** (1 / 3)
     v = math.sqrt(v_stack**2 + v_wind**2 + v_rad**2)
-
     Q = C_d * W_win * h_open * v * num_windows * 3600
 
     if Q <= 0:
@@ -86,70 +85,74 @@ def calc_time(co2, temp, hum):
     t_co2 = V / Q if co2 > LIMITS["co2"] else float("inf")
     t_temp = V / Q if temp < LIMITS["temperature"] else float("inf")
     t_hum = V / Q if hum < LIMITS["humidity"] else float("inf")
-
     t_min = min(t_co2, t_temp, t_hum)
 
     if math.isinf(t_min):
         t_min = 0
     else:
         t_min *= 60
-
     return Q, t_min
 
-
-# ===== Основной цикл =====
-async def loop():
+# ===== Слушаем новые данные =====
+async def monitor_new_measurements():
     while True:
         try:
-            cursor.execute("""
-                SELECT d.device_uid, d.tg_message_id,
-                       m.co2, m.temperature, m.humidity, m.timestamp
-                FROM devices d
-                JOIN measurements m ON m.device_uid=d.device_uid
-                WHERE m.id=(
-                    SELECT MAX(id)
+            # Получаем все устройства
+            cursor.execute("SELECT device_uid FROM devices")
+            devices = [row[0] for row in cursor.fetchall()]
+
+            for uid in devices:
+                # Берём id последнего measurement для устройства
+                cursor.execute("""
+                    SELECT id, co2, temperature, humidity, timestamp
                     FROM measurements
-                    WHERE device_uid=d.device_uid
-                )
-            """)
+                    WHERE device_uid=?
+                    ORDER BY id DESC
+                    LIMIT 1
+                """, (uid,))
+                row = cursor.fetchone()
+                if not row:
+                    continue
 
-            rows = cursor.fetchall()
+                meas_id, co2, temp, hum, ts = row
 
-            for uid, msg_id, co2, temp, hum, ts in rows:
+                # Если уже отправляли эту запись — пропускаем
+                if last_sent_id.get(uid) == meas_id:
+                    continue
+
+                # Рассчитываем вентиляцию
                 Q, t = calc_time(co2, temp, hum)
-
                 status = "✅ Параметры в норме" if t == 0 else f"⏳ До нормы: {t:.0f} мин"
 
+                # Формируем текст
                 text = (
                     f"🟢 *Состояние кабинета*\n"
                     f"Кабинет: `{uid}`\n"
                     f"Время: {ts}\n\n"
                     f"CO₂: {co2} ppm\n"
-                    f"🌡 Температура: {temp} °C\n"
-                    f"💧 Влажность: {hum} %\n\n"
+                    f"🌡 Температура: {temp if temp is not None else 'N/A'} °C\n"
+                    f"💧 Влажность: {hum if hum is not None else 'N/A'} %\n\n"
                     f"💨 Вентиляция: {Q:.0f} м³/ч\n"
                     f"{status}"
                 )
 
-                # ⚡ теперь редактируем сообщение, а не создаём новое
-                await send_or_update_message(text, msg_id, uid)
+                # Отправляем или редактируем сообщение
+                msg_id = await send_or_update_message(text, uid)
+                if msg_id:
+                    last_sent_id[uid] = meas_id
 
-            conn.commit()
-
+            await asyncio.sleep(1)  # проверяем очень часто (чтобы сразу при новом измерении)
         except Exception as e:
-            print("Loop error:", e)
-
-        await asyncio.sleep(60)
-
+            print("Monitor error:", e)
+            await asyncio.sleep(5)
 
 # ===== Запуск =====
 async def main():
     try:
-        await loop()
+        await monitor_new_measurements()
     finally:
         await bot.session.close()
         conn.close()
-
 
 if __name__ == "__main__":
     asyncio.run(main())
