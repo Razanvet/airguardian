@@ -1,8 +1,6 @@
-
-python-telegram-bot==20.7
 fastapi
-uvicorn
+uvicorn[standard]
 pydantic
-aiogram
+aiogram>=3.0
 requests
-
+python-multipart
