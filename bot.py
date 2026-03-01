@@ -1,118 +1,159 @@
 import asyncio
-from aiogram import Bot, Dispatcher, F
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.filters import Command
-from aiogram import exceptions
-from datetime import datetime
+import sqlite3
+import math
+from aiogram import Bot, types
+from aiogram.client.bot import DefaultBotProperties
+from aiogram.exceptions import TelegramAPIError
+from aiogram.dispatcher import Dispatcher
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.utils import executor
 
-BOT_TOKEN = "ВАШ_ТОКЕН_БОТА"
+# ===== Telegram =====
+BOT_TOKEN = "8552290162:AAGHM0pmC6BuCjE4NlTqG0N3pIGNZ4r4lCc"
+CHAT_ID = 1200659505  # твой chat_id
 
-bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher()
+bot = Bot(
+    token=BOT_TOKEN,
+    default=DefaultBotProperties(parse_mode="Markdown")
+)
+dp = Dispatcher(bot)
 
-# --- Настройки кабинетов ---
-CABINETS = [f"cabinet_{i}" for i in range(101, 111)]
-WORKING_CABINET = "cabinet_101"
-notifications_enabled = {}
+# ===== БД =====
+conn = sqlite3.connect("data.db", check_same_thread=False)
+cursor = conn.cursor()
 
-# --- Состояние кабинета (пример) ---
-# В реальности сюда нужно писать данные с вашего ESP32
-cabinet_state = {
-    "co2": 625,
-    "temperature": 29.5,
-    "humidity": 36.1
-}
+# ===== Параметры =====
+LIMITS = {"co2": 1000, "temperature": 18, "humidity": 30}
 
-# --- Кнопки ---
-def get_cabinet_keyboard():
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔔 Уведомления", callback_data="toggle_notifications")],
-        [InlineKeyboardButton(text="🏫 Смена кабинета", callback_data="change_cabinet")]
-    ])
-    return kb
+# ===== Храним последний отправленный measurement id для каждого устройства =====
+last_sent_id = {}
 
-# --- Приветственное сообщение ---
-@dp.message(Command(commands=["start"]))
-async def cmd_start(message: Message):
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=c, callback_data=f"select_{c}") for c in CABINETS]
-    ])
+# ===== Выбор кабинета =====
+SELECTED_CABINET = None
+AVAILABLE_CABINETS = [f"cabinet_{i}" for i in range(101, 111)]
+
+
+# ===== Отправка или редактирование сообщения =====
+async def send_or_update_message(text: str, uid: str):
+    try:
+        cursor.execute("SELECT tg_message_id FROM devices WHERE device_uid=?", (uid,))
+        row = cursor.fetchone()
+        msg_id = row[0] if row else None
+
+        if msg_id:
+            try:
+                await bot.edit_message_text(chat_id=CHAT_ID, message_id=msg_id, text=text)
+                return msg_id
+            except TelegramAPIError:
+                print(f"⚠ Не удалось отредактировать сообщение {msg_id}, создаём новое")
+
+        msg = await bot.send_message(CHAT_ID, text)
+        cursor.execute("UPDATE devices SET tg_message_id=? WHERE device_uid=?", (msg.message_id, uid))
+        conn.commit()
+        return msg.message_id
+
+    except Exception as e:
+        print("Telegram error:", e)
+        return None
+
+
+# ===== Приветствие и выбор кабинета =====
+@dp.message_handler(commands=["start"])
+async def start_command(message: types.Message):
+    global SELECTED_CABINET
+    SELECTED_CABINET = None
+
+    keyboard = InlineKeyboardMarkup(row_width=2)
+    buttons = []
+    for cabinet in AVAILABLE_CABINETS:
+        # только cabinet_101 рабочий, остальные "неактивные"
+        buttons.append(
+            InlineKeyboardButton(
+                text=cabinet if cabinet == "cabinet_101" else f"{cabinet} ❌",
+                callback_data=cabinet
+            )
+        )
+    keyboard.add(*buttons)
+
     await message.answer(
-        "Привет! Выберите кабинет для мониторинга (пока работает только cabinet_101):",
-        reply_markup=kb
+        "Привет! 👋 Выберите кабинет для мониторинга (пока работает только cabinet_101):",
+        reply_markup=keyboard
     )
 
-# --- Выбор кабинета ---
-@dp.callback_query(F.data.startswith("select_"))
-async def select_cabinet(query: CallbackQuery):
-    cabinet = query.data.split("_")[1] + "_" + query.data.split("_")[2]
-    if cabinet != WORKING_CABINET:
-        await query.answer("Этот кабинет пока не поддерживается 😅", show_alert=True)
-        return
-    notifications_enabled[query.from_user.id] = False
-    await query.message.delete()
-    await send_cabinet_state(query.from_user.id)
 
-# --- Отправка состояния кабинета ---
-async def send_cabinet_state(user_id: int):
-    co2 = cabinet_state["co2"]
-    temp = cabinet_state["temperature"]
-    hum = cabinet_state["humidity"]
+@dp.callback_query_handler(lambda c: c.data in AVAILABLE_CABINETS)
+async def select_cabinet(callback_query: types.CallbackQuery):
+    global SELECTED_CABINET
+    if callback_query.data == "cabinet_101":
+        SELECTED_CABINET = callback_query.data
+        await bot.answer_callback_query(callback_query.id, text=f"Выбран {SELECTED_CABINET}")
+        await bot.send_message(callback_query.from_user.id, "✅ Кабинет выбран! Данные будут отображаться здесь.")
+    else:
+        await bot.answer_callback_query(callback_query.id, text="⚠️ Этот кабинет пока не работает", show_alert=True)
 
-    # Цвет кружка
-    ok = (co2 < 800 and 18 <= temp <= 26 and 30 <= hum <= 60)
-    status_emoji = "🟢" if ok else "🔴"
 
-    now = datetime.now()
-    date_str = now.strftime("%d.%m.%Y")
-    time_str = now.strftime("%H:%M:%S")
-
-    text = (
-        f"{status_emoji} Состояние кабинета:\n"
-        f"📅 Дата: {date_str}\n"
-        f"⏰ Время: {time_str}\n"
-        f"💨 CO2: {co2} ppm\n"
-        f"🌡 Температура: {temp:.1f}°C\n"
-        f"💧 Влажность: {hum:.1f}%"
-    )
-
-    await bot.send_message(user_id, text, reply_markup=get_cabinet_keyboard())
-
-# --- Кнопки уведомлений и смены кабинета ---
-@dp.callback_query(F.data == "toggle_notifications")
-async def toggle_notifications(query: CallbackQuery):
-    current = notifications_enabled.get(query.from_user.id, False)
-    notifications_enabled[query.from_user.id] = not current
-    status = "включены" if not current else "выключены"
-    await query.answer(f"Уведомления {status}")
-
-@dp.callback_query(F.data == "change_cabinet")
-async def change_cabinet(query: CallbackQuery):
-    await query.message.delete()
-    await cmd_start(Message(chat=query.message.chat, from_user=query.from_user, text="/start"))
-
-# --- Фоновая проверка состояния кабинета и уведомлений ---
-async def notify_loop():
+# ===== Слушаем новые данные =====
+async def monitor_new_measurements():
+    global SELECTED_CABINET
     while True:
-        for user_id, enabled in notifications_enabled.items():
-            if enabled:
-                # Если параметры не в норме
-                co2 = cabinet_state["co2"]
-                temp = cabinet_state["temperature"]
-                hum = cabinet_state["humidity"]
-                if co2 >= 800 or temp < 18 or temp > 26 or hum < 30 or hum > 60:
-                    text = "⚠️ Внимание! Параметры не в норме!"
-                    # Отправка нового сообщения каждые 2 минуты
-                    try:
-                        await bot.send_message(user_id, text)
-                    except exceptions.TelegramBadRequest:
-                        pass
-        await asyncio.sleep(120)  # проверка каждые 2 минуты
+        try:
+            if not SELECTED_CABINET:
+                await asyncio.sleep(1)
+                continue
 
-# --- Запуск ---
+            uid = SELECTED_CABINET
+            cursor.execute("""
+                SELECT id, co2, temperature, humidity, timestamp
+                FROM measurements
+                WHERE device_uid=?
+                ORDER BY id DESC
+                LIMIT 1
+            """, (uid,))
+            row = cursor.fetchone()
+            if not row:
+                await asyncio.sleep(1)
+                continue
+
+            meas_id, co2, temp, hum, ts = row
+            if last_sent_id.get(uid) == meas_id:
+                await asyncio.sleep(1)
+                continue
+
+            status_ok = (co2 <= LIMITS["co2"] and temp >= LIMITS["temperature"] and hum >= LIMITS["humidity"])
+            status_circle = "✅" if status_ok else "❌"
+            status_text = "Параметры в норме" if status_ok else "Параметры вне нормы"
+
+            date_part, time_part = ts.split(" ")
+
+            text = (
+                f"{status_circle} Состояние кабинета\n"
+                f"Дата: {date_part}\n"
+                f"Время: {time_part}\n\n"
+                f"🫁 CO₂: {co2} ppm\n"
+                f"🌡 Температура: {temp if temp is not None else 'N/A'} °C\n"
+                f"💧 Влажность: {hum if hum is not None else 'N/A'} %\n\n"
+                f"{status_text}"
+            )
+
+            await send_or_update_message(text, uid)
+            last_sent_id[uid] = meas_id
+
+            await asyncio.sleep(1)
+
+        except Exception as e:
+            print("Monitor error:", e)
+            await asyncio.sleep(5)
+
+
+# ===== Запуск бота =====
 async def main():
-    asyncio.create_task(notify_loop())
-    await dp.start_polling(bot)
+    try:
+        asyncio.create_task(monitor_new_measurements())
+        await dp.start_polling()
+    finally:
+        await bot.session.close()
+        conn.close()
+
 
 if __name__ == "__main__":
     asyncio.run(main())
