@@ -15,7 +15,9 @@ bot = Bot(
     token=BOT_TOKEN,
     default=DefaultBotProperties(parse_mode="Markdown")
 )
-dp = Dispatcher(bot)
+
+# В 3.x просто создаём Dispatcher без передачи bot
+dp = Dispatcher()
 
 # ===== БД =====
 conn = sqlite3.connect("data.db", check_same_thread=False)
@@ -147,7 +149,7 @@ async def monitor_new_measurements():
 async def main():
     try:
         asyncio.create_task(monitor_new_measurements())
-        await dp.start_polling()
+        await dp.start_polling(bot)
     finally:
         await bot.session.close()
         conn.close()
