@@ -1,10 +1,9 @@
 import asyncio
 import sqlite3
 import math
-from aiogram import Bot, types
+from aiogram import Bot, Dispatcher, types
 from aiogram.client.bot import DefaultBotProperties
 from aiogram.exceptions import TelegramAPIError
-from aiogram.dispatcher import Dispatcher
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils import executor
 
