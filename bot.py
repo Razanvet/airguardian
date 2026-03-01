@@ -1,15 +1,21 @@
 import asyncio
 import sqlite3
-from aiogram import Bot, Dispatcher, types
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram import Bot, types
+from aiogram.client.bot import DefaultBotProperties
 from aiogram.exceptions import TelegramAPIError
+from aiogram.filters import Command
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram import Dispatcher
 
 # ===== Telegram =====
 BOT_TOKEN = "8552290162:AAGHM0pmC6BuCjE4NlTqG0N3pIGNZ4r4lCc"
-CHAT_ID = 1200659505
+CHAT_ID = 1200659505  # Твой чат ID
 
-bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher()
+bot = Bot(
+    token=BOT_TOKEN,
+    default=DefaultBotProperties(parse_mode="Markdown")
+)
+dp = Dispatcher(bot)
 
 # ===== БД =====
 conn = sqlite3.connect("data.db", check_same_thread=False)
@@ -17,10 +23,14 @@ cursor = conn.cursor()
 
 # ===== Параметры =====
 LIMITS = {"co2": 1000, "temperature": 18, "humidity": 30}
+
+# ===== Храним последний отправленный measurement id для каждого устройства =====
 last_sent_id = {}
+
+# ===== Выбор кабинета =====
 SELECTED_CABINET = None
 AVAILABLE_CABINETS = [f"cabinet_{i}" for i in range(101, 111)]
-NOTIFICATIONS_ENABLED = True
+
 
 # ===== Отправка или редактирование сообщения =====
 async def send_or_update_message(text: str, uid: str):
@@ -45,8 +55,9 @@ async def send_or_update_message(text: str, uid: str):
         print("Telegram error:", e)
         return None
 
+
 # ===== Приветствие и выбор кабинета =====
-@dp.message(commands=["start"])
+@dp.message(Command("start"))
 async def start_command(message: types.Message):
     global SELECTED_CABINET
     SELECTED_CABINET = None
@@ -67,6 +78,7 @@ async def start_command(message: types.Message):
         reply_markup=keyboard
     )
 
+
 @dp.callback_query(lambda c: c.data in AVAILABLE_CABINETS)
 async def select_cabinet(callback_query: types.CallbackQuery):
     global SELECTED_CABINET
@@ -76,6 +88,7 @@ async def select_cabinet(callback_query: types.CallbackQuery):
         await bot.send_message(callback_query.from_user.id, "✅ Кабинет выбран! Данные будут отображаться здесь.")
     else:
         await callback_query.answer(text="⚠️ Этот кабинет пока не работает", show_alert=True)
+
 
 # ===== Слушаем новые данные =====
 async def monitor_new_measurements():
@@ -129,14 +142,16 @@ async def monitor_new_measurements():
             print("Monitor error:", e)
             await asyncio.sleep(5)
 
+
 # ===== Запуск бота =====
 async def main():
     try:
         asyncio.create_task(monitor_new_measurements())
-        await dp.start_polling(bot)
+        await dp.start_polling()
     finally:
         await bot.session.close()
         conn.close()
+
 
 if __name__ == "__main__":
     asyncio.run(main())
