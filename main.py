@@ -2,7 +2,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import sqlite3
 from datetime import datetime, timedelta
-from bot import loop
+from bot import main as bot_main
 import asyncio
 
 app = FastAPI()
@@ -31,7 +31,6 @@ CREATE TABLE IF NOT EXISTS measurements (
 )
 """)
 
-# индекс для ускорения
 cursor.execute("""
 CREATE INDEX IF NOT EXISTS idx_measurements_device
 ON measurements(device_uid)
@@ -40,7 +39,6 @@ ON measurements(device_uid)
 conn.commit()
 
 
-# ===== Модель данных =====
 class IngestData(BaseModel):
     device_uid: str
     api_key: str
@@ -49,42 +47,14 @@ class IngestData(BaseModel):
     humidity: float
 
 
-# ===== Запуск Telegram-бота =====
 @app.on_event("startup")
 async def start_bot():
-    asyncio.create_task(loop())
+    asyncio.create_task(bot_main())
 
 
-# ===== Отладка =====
-@app.get("/debug/measurements/all")
-def debug_measurements_all():
-    try:
-        cursor.execute("SELECT * FROM measurements ORDER BY id ASC")
-        rows = cursor.fetchall()
-
-        result = [
-            {
-                "id": row[0],
-                "device_uid": row[1],
-                "co2": row[2],
-                "temperature": row[3],
-                "humidity": row[4],
-                "timestamp": row[5]
-            }
-            for row in rows
-        ]
-
-        return {"rows": result, "count": len(result)}
-
-    except Exception as e:
-        return {"error": str(e)}
-
-
-# ===== Приём данных =====
 @app.post("/ingest")
 async def ingest(data: IngestData):
 
-    # Проверяем устройство
     cursor.execute(
         "SELECT api_key FROM devices WHERE device_uid=?",
         (data.device_uid,)
@@ -95,16 +65,14 @@ async def ingest(data: IngestData):
         if row[0] != data.api_key:
             raise HTTPException(status_code=403, detail="Invalid API key")
     else:
-        cursor.execute("""
-            INSERT INTO devices (device_uid, api_key)
-            VALUES (?, ?)
-        """, (data.device_uid, data.api_key))
+        cursor.execute(
+            "INSERT INTO devices (device_uid, api_key) VALUES (?, ?)",
+            (data.device_uid, data.api_key)
+        )
 
-    # Время (МСК)
     timestamp = datetime.utcnow() + timedelta(hours=3)
     ts = timestamp.strftime("%Y-%m-%d %H:%M:%S")
 
-    # Сохраняем измерения
     cursor.execute("""
         INSERT INTO measurements
         (device_uid, co2, temperature, humidity, timestamp)
@@ -118,5 +86,4 @@ async def ingest(data: IngestData):
     ))
 
     conn.commit()
-
     return {"status": "ok"}
