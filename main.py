@@ -1,11 +1,9 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+from bot import dp, bot, main as bot_main, data_queue
 import sqlite3
 from datetime import datetime, timedelta
 import asyncio
-
-# Импортируем bot.py
-from bot import dp, bot, main as bot_main
 
 app = FastAPI()
 
@@ -13,7 +11,6 @@ app = FastAPI()
 conn = sqlite3.connect("data.db", check_same_thread=False)
 cursor = conn.cursor()
 
-# ===== Таблицы =====
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS devices (
     device_uid TEXT PRIMARY KEY,
@@ -40,7 +37,6 @@ ON measurements(device_uid)
 
 conn.commit()
 
-# ===== Модель данных =====
 class IngestData(BaseModel):
     device_uid: str
     api_key: str
@@ -48,50 +44,37 @@ class IngestData(BaseModel):
     temperature: float
     humidity: float
 
-
-# ===== Запуск Telegram-бота =====
 @app.on_event("startup")
 async def start_bot():
     asyncio.create_task(bot_main())
 
-
-# ===== Приём данных =====
 @app.post("/ingest")
 async def ingest(data: IngestData):
-
-    # Проверяем устройство
-    cursor.execute(
-        "SELECT api_key FROM devices WHERE device_uid=?",
-        (data.device_uid,)
-    )
+    # Проверка устройства
+    cursor.execute("SELECT api_key FROM devices WHERE device_uid=?", (data.device_uid,))
     row = cursor.fetchone()
-
     if row:
         if row[0] != data.api_key:
             raise HTTPException(status_code=403, detail="Invalid API key")
     else:
-        cursor.execute("""
-            INSERT INTO devices (device_uid, api_key)
-            VALUES (?, ?)
-        """, (data.device_uid, data.api_key))
+        cursor.execute("INSERT INTO devices (device_uid, api_key) VALUES (?, ?)", (data.device_uid, data.api_key))
 
     # Время (МСК)
-    timestamp = datetime.utcnow() + timedelta(hours=3)
-    ts = timestamp.strftime("%Y-%m-%d %H:%M:%S")
+    ts = (datetime.utcnow() + timedelta(hours=3)).strftime("%Y-%m-%d %H:%M:%S")
 
-    # Сохраняем измерения
-    cursor.execute("""
-        INSERT INTO measurements
-        (device_uid, co2, temperature, humidity, timestamp)
-        VALUES (?, ?, ?, ?, ?)
-    """, (
-        data.device_uid,
-        data.co2,
-        data.temperature,
-        data.humidity,
-        ts
-    ))
-
+    cursor.execute(
+        "INSERT INTO measurements (device_uid, co2, temperature, humidity, timestamp) VALUES (?, ?, ?, ?, ?)",
+        (data.device_uid, data.co2, data.temperature, data.humidity, ts)
+    )
     conn.commit()
+
+    # ===== Отправляем данные в очередь бота =====
+    cabinet_number = 101  # <-- тут нужно сопоставление device_uid -> кабинет
+    await data_queue.put({
+        "cabinet": cabinet_number,
+        "co2": data.co2,
+        "temperature": data.temperature,
+        "humidity": data.humidity
+    })
 
     return {"status": "ok"}
