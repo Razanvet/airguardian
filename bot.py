@@ -4,7 +4,7 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
+BOT_TOKEN = "8552290162:AAGHM0pmC6BuCjE4NlTqG0N3pIGNZ4r4lCc"
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -164,3 +164,4 @@ async def process_queue():
 async def main():
     asyncio.create_task(process_queue())
     await dp.start_polling(bot)
+
