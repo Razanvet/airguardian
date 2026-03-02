@@ -6,7 +6,7 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"  # вставь свой токен
+BOT_TOKEN = "8552290162:AAGHM0pmC6BuCjE4NlTqG0N3pIGNZ4r4lCc"  # вставь свой токен
 
 # Инициализация бота
 bot = Bot(token=BOT_TOKEN)
@@ -135,3 +135,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
