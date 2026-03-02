@@ -1,12 +1,12 @@
 # bot.py
 import asyncio
 import random
+
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
-from aiogram.filters.text import Text  # ✅ корректно для aiogram 3.13.1
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-BOT_TOKEN = "8552290162:AAGHM0pmC6BuCjE4NlTqG0N3pIGNZ4r4lCc"
+BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
 
 # Инициализация бота
 bot = Bot(token=BOT_TOKEN)
@@ -46,7 +46,7 @@ def main_buttons(notifications_on: bool):
     return keyboard
 
 # ===== /start =====
-@dp.message(Command(commands=["start"]))
+@dp.message(Command("start"))
 async def start_command(message: types.Message):
     user_state[message.from_user.id] = {"cabinet": None, "notifications": False, "last_alert_msg": None}
     await message.answer(
@@ -63,7 +63,7 @@ async def select_cabinet(query: types.CallbackQuery):
     state["cabinet"] = cabinet_number
     state["notifications"] = False
 
-    # Редактируем сообщение и сохраняем его
+    # Сохраняем сообщение, которое будем редактировать
     msg = await query.message.edit_text(
         f"Вы выбрали кабинет {cabinet_number}.\nОжидание данных...",
         reply_markup=main_buttons(state["notifications"])
@@ -74,7 +74,7 @@ async def select_cabinet(query: types.CallbackQuery):
     await query.answer()
 
 # ===== Основные кнопки =====
-@dp.callback_query(Text(["toggle_notifications", "change_cabinet"]))
+@dp.callback_query(lambda c: c.data in ["toggle_notifications", "change_cabinet"])
 async def handle_main_buttons(query: types.CallbackQuery):
     user_id = query.from_user.id
     state = user_state.get(user_id)
@@ -112,7 +112,6 @@ async def update_cabinet_status(cabinet: int, co2=None, temperature=None, humidi
             if state["last_alert_msg"]:
                 await state["last_alert_msg"].edit_text(text, reply_markup=main_buttons(state["notifications"]))
             else:
-                # На всякий случай, если сообщение потерялось
                 msg = await bot.send_message(user_id, text, reply_markup=main_buttons(state["notifications"]))
                 state["last_alert_msg"] = msg
         except Exception as e:
@@ -129,6 +128,7 @@ async def send_alert(cabinet: int):
                 await state["last_alert_msg"].delete()
             msg = await bot.send_message(user_id, alert_text)
             state["last_alert_msg"] = msg
+            # Удалим alert через 2 минуты
             await asyncio.sleep(120)
             await msg.delete()
         except Exception as e:
@@ -137,7 +137,7 @@ async def send_alert(cabinet: int):
 # ===== Симулятор поступления данных =====
 async def simulate_data_updates():
     while True:
-        await asyncio.sleep(10)  # каждые 10 секунд
+        await asyncio.sleep(10)
         for user_id, state in user_state.items():
             cabinet = state.get("cabinet")
             if cabinet:
@@ -149,9 +149,8 @@ async def simulate_data_updates():
 # ===== Запуск бота =====
 async def main():
     print("Bot started")
-    asyncio.create_task(simulate_data_updates())  # старт симулятора данных
+    asyncio.create_task(simulate_data_updates())
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    import asyncio
     asyncio.run(main())
