@@ -1,5 +1,6 @@
 # bot.py
 import asyncio
+import random
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command, Text
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -132,7 +133,25 @@ async def send_alert(cabinet: int):
         except Exception as e:
             print(f"Ошибка alert для пользователя {user_id}: {e}")
 
+# ===== Симулятор поступления данных =====
+async def simulate_data_updates():
+    while True:
+        await asyncio.sleep(10)  # каждые 10 секунд
+        for user_id, state in user_state.items():
+            cabinet = state.get("cabinet")
+            if cabinet:
+                co2 = random.randint(350, 800)
+                temperature = random.randint(18, 26)
+                humidity = random.randint(30, 60)
+                await update_cabinet_status(cabinet, co2, temperature, humidity)
+
 # ===== Запуск бота =====
 async def main():
     print("Bot started")
+    asyncio.create_task(simulate_data_updates())  # старт симулятора данных
     await dp.start_polling(bot)
+
+# Если запускаем напрямую
+if __name__ == "__main__":
+    import asyncio
+    asyncio.run(main())
