@@ -2,8 +2,10 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import sqlite3
 from datetime import datetime, timedelta
-from bot import main as bot_main
 import asyncio
+
+# Импортируем bot.py
+from bot import dp, bot, main as bot_main
 
 app = FastAPI()
 
@@ -38,7 +40,7 @@ ON measurements(device_uid)
 
 conn.commit()
 
-
+# ===== Модель данных =====
 class IngestData(BaseModel):
     device_uid: str
     api_key: str
@@ -47,14 +49,17 @@ class IngestData(BaseModel):
     humidity: float
 
 
+# ===== Запуск Telegram-бота =====
 @app.on_event("startup")
 async def start_bot():
     asyncio.create_task(bot_main())
 
 
+# ===== Приём данных =====
 @app.post("/ingest")
 async def ingest(data: IngestData):
 
+    # Проверяем устройство
     cursor.execute(
         "SELECT api_key FROM devices WHERE device_uid=?",
         (data.device_uid,)
@@ -65,14 +70,16 @@ async def ingest(data: IngestData):
         if row[0] != data.api_key:
             raise HTTPException(status_code=403, detail="Invalid API key")
     else:
-        cursor.execute(
-            "INSERT INTO devices (device_uid, api_key) VALUES (?, ?)",
-            (data.device_uid, data.api_key)
-        )
+        cursor.execute("""
+            INSERT INTO devices (device_uid, api_key)
+            VALUES (?, ?)
+        """, (data.device_uid, data.api_key))
 
+    # Время (МСК)
     timestamp = datetime.utcnow() + timedelta(hours=3)
     ts = timestamp.strftime("%Y-%m-%d %H:%M:%S")
 
+    # Сохраняем измерения
     cursor.execute("""
         INSERT INTO measurements
         (device_uid, co2, temperature, humidity, timestamp)
@@ -86,4 +93,5 @@ async def ingest(data: IngestData):
     ))
 
     conn.commit()
+
     return {"status": "ok"}
