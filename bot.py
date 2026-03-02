@@ -1,131 +1,138 @@
+# bot.py
 import asyncio
 from aiogram import Bot, Dispatcher, types
-from aiogram.filters import Command
+from aiogram.filters import Command, Text
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-import sqlite3
-from datetime import datetime, timedelta
 
-# ===== Токен бота и ID чата =====
 BOT_TOKEN = "8552290162:AAGHM0pmC6BuCjE4NlTqG0N3pIGNZ4r4lCc"
 CHAT_ID = 1200659505
 
+# Инициализация бота
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# ===== База данных =====
-conn = sqlite3.connect("data.db", check_same_thread=False)
-cursor = conn.cursor()
+# ===== Хранилище состояния пользователей =====
+# user_id -> {"cabinet": int, "notifications": bool, "last_alert_msg": Message}
+user_state = {}
 
-# ===== Состояние пользователей =====
-user_state = {}  # {user_id: {"cabinet": "cabinet_101", "notifications": True, "last_alert_msg": None}}
-
-# ===== Кнопки =====
-def cabinet_buttons():
+# ===== Функции клавиатур =====
+def cabinet_selection_buttons():
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="Уведомления", callback_data="toggle_notifications")],
-            [InlineKeyboardButton(text="Смена кабинета", callback_data="change_cabinet")]
+            [InlineKeyboardButton(text=f"Кабинет {i}", callback_data=f"cabinet_{i}")]
+            for i in range(101, 111)
         ]
     )
     return keyboard
 
-# ===== Хендлер /start =====
+def main_buttons(notifications_on: bool):
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🔔 Выключить уведомления" if notifications_on else "🔔 Включить уведомления",
+                    callback_data="toggle_notifications"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🔄 Сменить кабинет",
+                    callback_data="change_cabinet"
+                )
+            ]
+        ]
+    )
+    return keyboard
+
+# ===== /start =====
 @dp.message(Command(commands=["start"]))
 async def start_command(message: types.Message):
     user_state[message.from_user.id] = {"cabinet": None, "notifications": False, "last_alert_msg": None}
-    await message.answer("Выберите кабинет (пока данные отсутствуют)", reply_markup=None)
-
-# ===== Выбор кабинета =====
-@dp.callback_query()
-async def callback_handler(query: types.CallbackQuery):
-    user_id = query.from_user.id
-    data = query.data
-
-    if data.startswith("cabinet_"):
-        user_state[user_id]["cabinet"] = data
-        await query.message.edit_text(f"Кабинет {data} выбран.\nОжидание данных...", reply_markup=cabinet_buttons())
-
-    elif data == "toggle_notifications":
-        state = user_state[user_id]
-        state["notifications"] = not state.get("notifications", False)
-        status = "включены" if state["notifications"] else "выключены"
-        await query.message.answer(f"Уведомления {status}")
-
-    elif data == "change_cabinet":
-        state = user_state[user_id]
-        state["cabinet"] = None
-        await query.message.edit_text("Выберите новый кабинет:", reply_markup=None)
-
-    await query.answer()  # чтобы убрать "часики" Telegram
-
-# ===== Отправка состояния кабинета =====
-async def send_cabinet_status():
-    while True:
-        cursor.execute("SELECT * FROM measurements ORDER BY id DESC LIMIT 1")
-        row = cursor.fetchone()
-
-        for user_id, state in user_state.items():
-            cabinet = state.get("cabinet")
-            if not cabinet:
-                continue
-
-            if row:
-                co2, temp, hum = row[2], row[3], row[4]
-                text = (
-                    f"Состояние кабинета {cabinet}:\n"
-                    f"CO2: {co2}\n"
-                    f"Температура: {temp}\n"
-                    f"Влажность: {hum}"
-                )
-            else:
-                text = f"Состояние кабинета {cabinet}:\nОжидание данных...\n---"
-
-            try:
-                await bot.send_message(user_id, text=text, reply_markup=cabinet_buttons())
-            except Exception as e:
-                print(f"Ошибка отправки статуса: {e}")
-
-        await asyncio.sleep(30)  # обновление каждые 30 секунд
-
-# ===== Отправка уведомлений =====
-async def send_alerts():
-    while True:
-        cursor.execute("SELECT * FROM measurements ORDER BY id DESC LIMIT 1")
-        row = cursor.fetchone()
-
-        for user_id, state in user_state.items():
-            if not state.get("notifications") or not state.get("cabinet"):
-                continue
-
-            if row:
-                co2, temp, hum = row[2], row[3], row[4]
-                alert_needed = co2 > 1000 or temp > 30 or hum > 70  # пример порогов
-
-                if alert_needed:
-                    last_msg = state.get("last_alert_msg")
-                    text = f"⚠️ Внимание! Параметры не в норме!\nCO2: {co2}\nТемп: {temp}\nВлажность: {hum}"
-
-                    # Удаляем предыдущее сообщение
-                    if last_msg:
-                        try:
-                            await bot.delete_message(chat_id=user_id, message_id=last_msg)
-                        except:
-                            pass
-
-                    # Отправляем новое
-                    msg = await bot.send_message(user_id, text=text)
-                    state["last_alert_msg"] = msg.message_id
-
-        await asyncio.sleep(120)  # каждые 2 минуты
-
-# ===== Основная точка запуска =====
-async def main():
-    # Запуск поллинга бота и задач
-    await asyncio.gather(
-        dp.start_polling(bot),
-        send_cabinet_status(),
-        send_alerts()
+    await message.answer(
+        "Выберите кабинет:",
+        reply_markup=cabinet_selection_buttons()
     )
 
-if __name__ == "__main__":
-    asyncio.run(main())
+# ===== Обработка кнопок выбора кабинета =====
+@dp.callback_query(lambda c: c.data and c.data.startswith("cabinet_"))
+async def select_cabinet(query: types.CallbackQuery):
+    user_id = query.from_user.id
+    cabinet_number = int(query.data.split("_")[1])
+    state = user_state.get(user_id, {"notifications": False})
+    state["cabinet"] = cabinet_number
+    state["notifications"] = False
+    state["last_alert_msg"] = None
+    user_state[user_id] = state
+
+    await query.message.edit_text(
+        f"Вы выбрали кабинет {cabinet_number}.\nОжидание данных...",
+        reply_markup=main_buttons(state["notifications"])
+    )
+    await query.answer()
+
+# ===== Основные кнопки =====
+@dp.callback_query(Text(["toggle_notifications", "change_cabinet"]))
+async def handle_main_buttons(query: types.CallbackQuery):
+    user_id = query.from_user.id
+    state = user_state.get(user_id)
+    if not state:
+        await query.answer("Ошибка состояния пользователя")
+        return
+
+    if query.data == "toggle_notifications":
+        state["notifications"] = not state["notifications"]
+        await query.message.edit_reply_markup(reply_markup=main_buttons(state["notifications"]))
+        await query.answer("Уведомления включены" if state["notifications"] else "Уведомления выключены")
+
+    elif query.data == "change_cabinet":
+        state["cabinet"] = None
+        state["last_alert_msg"] = None
+        await query.message.edit_text(
+            "Выберите новый кабинет:",
+            reply_markup=cabinet_selection_buttons()
+        )
+
+# ===== Функция для обновления состояния кабинета =====
+async def update_cabinet_status(cabinet: int, co2=None, temperature=None, humidity=None):
+    for user_id, state in user_state.items():
+        if state.get("cabinet") != cabinet:
+            continue
+
+        text = (
+            f"Кабинет {cabinet}:\n"
+            f"CO2: {co2 if co2 is not None else '-'} ppm\n"
+            f"Температура: {temperature if temperature is not None else '-'} °C\n"
+            f"Влажность: {humidity if humidity is not None else '-'} %"
+        )
+
+        try:
+            if state["last_alert_msg"]:
+                await state["last_alert_msg"].edit_text(text, reply_markup=main_buttons(state["notifications"]))
+            else:
+                msg = await bot.send_message(CHAT_ID, text, reply_markup=main_buttons(state["notifications"]))
+                state["last_alert_msg"] = msg
+        except Exception as e:
+            print(f"Ошибка отправки сообщения: {e}")
+
+# ===== Уведомление о критических значениях =====
+async def send_alert(cabinet: int):
+    for user_id, state in user_state.items():
+        if state.get("cabinet") != cabinet or not state.get("notifications"):
+            continue
+        try:
+            alert_text = "⚠️ Внимание! Параметры не в норме!"
+            if state.get("last_alert_msg"):
+                await state["last_alert_msg"].delete()
+            msg = await bot.send_message(CHAT_ID, alert_text)
+            state["last_alert_msg"] = msg
+            await asyncio.sleep(120)
+            await msg.delete()
+        except Exception as e:
+            print(f"Ошибка alert: {e}")
+
+# ===== Запуск бота =====
+async def main():
+    print("Bot started")
+    await dp.start_polling(bot)
+
+# Для интеграции с main.py
