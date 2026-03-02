@@ -5,7 +5,6 @@ from aiogram.filters import Command, Text
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 BOT_TOKEN = "8552290162:AAGHM0pmC6BuCjE4NlTqG0N3pIGNZ4r4lCc"
-CHAT_ID = 1200659505
 
 # Инициализация бота
 bot = Bot(token=BOT_TOKEN)
@@ -61,13 +60,15 @@ async def select_cabinet(query: types.CallbackQuery):
     state = user_state.get(user_id, {"notifications": False})
     state["cabinet"] = cabinet_number
     state["notifications"] = False
-    state["last_alert_msg"] = None
-    user_state[user_id] = state
 
-    await query.message.edit_text(
+    # Редактируем сообщение и сохраняем его
+    msg = await query.message.edit_text(
         f"Вы выбрали кабинет {cabinet_number}.\nОжидание данных...",
         reply_markup=main_buttons(state["notifications"])
     )
+    state["last_alert_msg"] = msg
+    user_state[user_id] = state
+
     await query.answer()
 
 # ===== Основные кнопки =====
@@ -109,10 +110,11 @@ async def update_cabinet_status(cabinet: int, co2=None, temperature=None, humidi
             if state["last_alert_msg"]:
                 await state["last_alert_msg"].edit_text(text, reply_markup=main_buttons(state["notifications"]))
             else:
-                msg = await bot.send_message(CHAT_ID, text, reply_markup=main_buttons(state["notifications"]))
+                # На всякий случай, если сообщение потерялось
+                msg = await bot.send_message(user_id, text, reply_markup=main_buttons(state["notifications"]))
                 state["last_alert_msg"] = msg
         except Exception as e:
-            print(f"Ошибка отправки сообщения: {e}")
+            print(f"Ошибка отправки сообщения пользователю {user_id}: {e}")
 
 # ===== Уведомление о критических значениях =====
 async def send_alert(cabinet: int):
@@ -123,16 +125,14 @@ async def send_alert(cabinet: int):
             alert_text = "⚠️ Внимание! Параметры не в норме!"
             if state.get("last_alert_msg"):
                 await state["last_alert_msg"].delete()
-            msg = await bot.send_message(CHAT_ID, alert_text)
+            msg = await bot.send_message(user_id, alert_text)
             state["last_alert_msg"] = msg
             await asyncio.sleep(120)
             await msg.delete()
         except Exception as e:
-            print(f"Ошибка alert: {e}")
+            print(f"Ошибка alert для пользователя {user_id}: {e}")
 
 # ===== Запуск бота =====
 async def main():
     print("Bot started")
     await dp.start_polling(bot)
-
-# Для интеграции с main.py
