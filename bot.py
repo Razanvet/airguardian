@@ -4,7 +4,7 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-BOT_TOKEN = "8552290162:AAGHM0pmC6BuCjE4NlTqG0N3pIGNZ4r4lCc"
+BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -13,7 +13,7 @@ dp = Dispatcher()
 user_state = {}  # user_id -> {"cabinet": int, "notifications": bool, "last_alert_msg": Message}
 
 # ===== Очередь для поступающих данных от ESP32 =====
-data_queue = asyncio.Queue()  # сюда main.py будет класть данные
+data_queue = asyncio.Queue()
 
 # ===== Клавиатуры =====
 def cabinet_selection_buttons():
@@ -96,36 +96,59 @@ async def handle_main_buttons(query: types.CallbackQuery):
             reply_markup=cabinet_selection_buttons()
         )
 
+# ===== Проверка нормы =====
+def check_status(co2, temp, hum):
+    co2_ok = co2 <= 800
+    temp_ok = 20 <= temp <= 25
+    hum_ok = 30 <= hum <= 60
+    overall_ok = co2_ok and temp_ok and hum_ok
+    return {
+        "co2": "В норме ✅" if co2_ok else "Не в норме ⚠️",
+        "temp": "В норме ✅" if temp_ok else "Не в норме ⚠️",
+        "hum": "В норме ✅" if hum_ok else "Не в норме ⚠️",
+        "overall": overall_ok
+    }
+
 # ===== Обновление данных кабинета =====
 async def update_cabinet_status(cabinet: int, co2: float, temperature: float, humidity: float):
     for user_id, state in user_state.items():
         if state.get("cabinet") != cabinet:
             continue
+
+        status = check_status(co2, temperature, humidity)
+
         text = (
             f"Кабинет {cabinet}:\n"
-            f"CO2: {co2} ppm\n"
-            f"Температура: {temperature} °C\n"
-            f"Влажность: {humidity} %"
+            f"CO2: {co2} ppm — {status['co2']}\n"
+            f"Температура: {temperature} °C — {status['temp']}\n"
+            f"Влажность: {humidity} % — {status['hum']}"
         )
+
         try:
             if state.get("last_alert_msg"):
                 await state["last_alert_msg"].edit_text(text, reply_markup=main_buttons(state["notifications"]))
             else:
                 msg = await bot.send_message(user_id, text, reply_markup=main_buttons(state["notifications"]))
                 state["last_alert_msg"] = msg
+
+            # ===== Уведомления =====
+            if state["notifications"] and not status["overall"]:
+                asyncio.create_task(send_alert_repeat(user_id, f"⚠️ Параметры кабинета {cabinet} вне нормы!"))
         except Exception as e:
             print(f"Ошибка обновления данных пользователя {user_id}: {e}")
 
-# ===== Alert =====
-async def send_alert(cabinet: int, alert_text: str):
-    for user_id, state in user_state.items():
-        if state.get("cabinet") != cabinet or not state.get("notifications"):
-            continue
-        try:
-            msg = await bot.send_message(user_id, f"⚠️ {alert_text}")
-            state["last_alert_msg"] = msg
-        except Exception as e:
-            print(f"Ошибка отправки alert пользователю {user_id}: {e}")
+# ===== Функция уведомления с повтором =====
+async def send_alert_repeat(user_id, alert_text):
+    try:
+        msg = await bot.send_message(user_id, alert_text)
+        # через 60 секунд удаляем
+        await asyncio.sleep(60)
+        await msg.delete()
+        # сразу же дублируем
+        await asyncio.sleep(0.1)
+        asyncio.create_task(send_alert_repeat(user_id, alert_text))
+    except Exception as e:
+        print(f"Ошибка уведомления пользователя {user_id}: {e}")
 
 # ===== Фоновая задача: слушаем очередь данных =====
 async def process_queue():
@@ -136,9 +159,6 @@ async def process_queue():
         temperature = data.get("temperature")
         humidity = data.get("humidity")
         await update_cabinet_status(cabinet, co2, temperature, humidity)
-        # Пример alert
-        if co2 > 1000:
-            await send_alert(cabinet, "CO2 слишком высокий!")
 
 # ===== Запуск бота =====
 async def main():
