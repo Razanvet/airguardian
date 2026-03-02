@@ -2,7 +2,8 @@
 import asyncio
 import random
 from aiogram import Bot, Dispatcher, types
-from aiogram.filters import Command, Text
+from aiogram.filters import Command
+from aiogram.filters.text import Text  # ✅ корректно для aiogram 3.13.1
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 BOT_TOKEN = "8552290162:AAGHM0pmC6BuCjE4NlTqG0N3pIGNZ4r4lCc"
@@ -151,7 +152,6 @@ async def main():
     asyncio.create_task(simulate_data_updates())  # старт симулятора данных
     await dp.start_polling(bot)
 
-# Если запускаем напрямую
 if __name__ == "__main__":
     import asyncio
     asyncio.run(main())
