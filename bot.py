@@ -35,26 +35,24 @@ alert_message_id = None
 def get_status_keyboard():
     notif_text = "🔔 Уведомления: ВКЛ" if NOTIFICATIONS_ENABLED else "🔕 Уведомления: ВЫКЛ"
 
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+    return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=notif_text, callback_data="toggle_notifications")],
         [InlineKeyboardButton(text="🔄 Сменить кабинет", callback_data="change_cabinet")]
     ])
-    return keyboard
 
 
 def get_cabinet_keyboard():
     buttons = [
         InlineKeyboardButton(
-            text=cab if cab == "cabinet_101" else f"{cab} ❌",
+            text=cab,
             callback_data=f"cabinet_{cab}"
         )
         for cab in AVAILABLE_CABINETS
     ]
 
-    keyboard = InlineKeyboardMarkup(
+    return InlineKeyboardMarkup(
         inline_keyboard=[buttons[i:i+2] for i in range(0, len(buttons), 2)]
     )
-    return keyboard
 
 
 # ================== /start ==================
@@ -65,7 +63,7 @@ async def start_handler(message: types.Message):
     SELECTED_CABINET = None
 
     await message.answer(
-        "Выберите кабинет (работает только cabinet_101):",
+        "Выберите кабинет:",
         reply_markup=get_cabinet_keyboard()
     )
 
@@ -74,27 +72,62 @@ async def start_handler(message: types.Message):
 
 @dp.callback_query(F.data.startswith("cabinet_"))
 async def cabinet_selected(callback: types.CallbackQuery):
-    global SELECTED_CABINET
+    global SELECTED_CABINET, alert_message_id
 
-    cab = callback.data.replace("cabinet_", "")
+    SELECTED_CABINET = callback.data.replace("cabinet_", "")
+    alert_message_id = None
 
-    if cab == "cabinet_101":
-        SELECTED_CABINET = cab
-        await callback.answer("Кабинет выбран")
-        await bot.send_message(CHAT_ID, "✅ Мониторинг запущен")
-    else:
-        await callback.answer("Этот кабинет пока недоступен", show_alert=True)
+    await callback.answer("Кабинет выбран")
+
+    text = (
+        f"⚪ Состояние кабинета\n\n"
+        f"Дата: —\n"
+        f"Время: —\n\n"
+        f"🫁 CO₂: — ppm\n"
+        f"🌡 Температура: — °C\n"
+        f"💧 Влажность: — %\n\n"
+        f"Ожидание данных..."
+    )
+
+    msg = await bot.send_message(
+        CHAT_ID,
+        text,
+        reply_markup=get_status_keyboard()
+    )
+
+    # сохранить message_id
+    cursor.execute(
+        "INSERT OR IGNORE INTO devices (device_uid, api_key) VALUES (?, ?)",
+        (SELECTED_CABINET, "")
+    )
+
+    cursor.execute(
+        "UPDATE devices SET tg_message_id=? WHERE device_uid=?",
+        (msg.message_id, SELECTED_CABINET)
+    )
+
+    conn.commit()
 
 
-# ================== КНОПКА УВЕДОМЛЕНИЙ ==================
+# ================== ПЕРЕКЛЮЧЕНИЕ УВЕДОМЛЕНИЙ ==================
 
 @dp.callback_query(F.data == "toggle_notifications")
 async def toggle_notifications(callback: types.CallbackQuery):
     global NOTIFICATIONS_ENABLED
+
     NOTIFICATIONS_ENABLED = not NOTIFICATIONS_ENABLED
 
     await callback.answer("Настройки обновлены")
-    # просто обновим сообщение при следующем мониторинге
+
+    # обновим кнопки без изменения текста
+    try:
+        await bot.edit_message_reply_markup(
+            CHAT_ID,
+            callback.message.message_id,
+            reply_markup=get_status_keyboard()
+        )
+    except:
+        pass
 
 
 # ================== СМЕНА КАБИНЕТА ==================
@@ -111,7 +144,7 @@ async def change_cabinet(callback: types.CallbackQuery):
     except:
         pass
 
-    # удалить alert если есть
+    # удалить alert
     if alert_message_id:
         try:
             await bot.delete_message(CHAT_ID, alert_message_id)
@@ -180,6 +213,7 @@ async def monitor():
         """, (uid,))
 
         row = cursor.fetchone()
+
         if not row:
             await asyncio.sleep(5)
             continue
