@@ -151,4 +151,5 @@ async def monitor():
 # ===== ГЛАВНАЯ ФУНКЦИЯ =====
 async def main():
     asyncio.create_task(monitor())
-    await dp.start_polling(bot)
+    asyncio.create_task(dp.start_polling(bot))
+
