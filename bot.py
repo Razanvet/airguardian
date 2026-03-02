@@ -6,17 +6,16 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-BOT_TOKEN = "8552290162:AAGHM0pmC6BuCjE4NlTqG0N3pIGNZ4r4lCc"
+BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"  # вставь свой токен
 
 # Инициализация бота
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
 # ===== Хранилище состояния пользователей =====
-# user_id -> {"cabinet": int, "notifications": bool, "last_alert_msg": Message}
-user_state = {}
+user_state = {}  # user_id -> {"cabinet": int, "notifications": bool, "last_alert_msg": Message}
 
-# ===== Функции клавиатур =====
+# ===== Клавиатуры =====
 def cabinet_selection_buttons():
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
@@ -46,15 +45,16 @@ def main_buttons(notifications_on: bool):
     return keyboard
 
 # ===== /start =====
-@dp.message(Command("start"))
+@dp.message(Command(commands=["start"]))
 async def start_command(message: types.Message):
     user_state[message.from_user.id] = {"cabinet": None, "notifications": False, "last_alert_msg": None}
+    # Клавиатура выбора кабинета гарантированно отправляется
     await message.answer(
         "Выберите кабинет:",
         reply_markup=cabinet_selection_buttons()
     )
 
-# ===== Обработка кнопок выбора кабинета =====
+# ===== Выбор кабинета =====
 @dp.callback_query(lambda c: c.data and c.data.startswith("cabinet_"))
 async def select_cabinet(query: types.CallbackQuery):
     user_id = query.from_user.id
@@ -63,14 +63,12 @@ async def select_cabinet(query: types.CallbackQuery):
     state["cabinet"] = cabinet_number
     state["notifications"] = False
 
-    # Сохраняем сообщение, которое будем редактировать
     msg = await query.message.edit_text(
         f"Вы выбрали кабинет {cabinet_number}.\nОжидание данных...",
         reply_markup=main_buttons(state["notifications"])
     )
     state["last_alert_msg"] = msg
     user_state[user_id] = state
-
     await query.answer()
 
 # ===== Основные кнопки =====
@@ -95,7 +93,7 @@ async def handle_main_buttons(query: types.CallbackQuery):
             reply_markup=cabinet_selection_buttons()
         )
 
-# ===== Функция для обновления состояния кабинета =====
+# ===== Обновление данных кабинета =====
 async def update_cabinet_status(cabinet: int, co2=None, temperature=None, humidity=None):
     for user_id, state in user_state.items():
         if state.get("cabinet") != cabinet:
@@ -117,27 +115,10 @@ async def update_cabinet_status(cabinet: int, co2=None, temperature=None, humidi
         except Exception as e:
             print(f"Ошибка отправки сообщения пользователю {user_id}: {e}")
 
-# ===== Уведомление о критических значениях =====
-async def send_alert(cabinet: int):
-    for user_id, state in user_state.items():
-        if state.get("cabinet") != cabinet or not state.get("notifications"):
-            continue
-        try:
-            alert_text = "⚠️ Внимание! Параметры не в норме!"
-            if state.get("last_alert_msg"):
-                await state["last_alert_msg"].delete()
-            msg = await bot.send_message(user_id, alert_text)
-            state["last_alert_msg"] = msg
-            # Удалим alert через 2 минуты
-            await asyncio.sleep(120)
-            await msg.delete()
-        except Exception as e:
-            print(f"Ошибка alert для пользователя {user_id}: {e}")
-
-# ===== Симулятор поступления данных =====
+# ===== Симулятор данных =====
 async def simulate_data_updates():
     while True:
-        await asyncio.sleep(10)
+        await asyncio.sleep(5)  # обновление каждые 5 секунд
         for user_id, state in user_state.items():
             cabinet = state.get("cabinet")
             if cabinet:
@@ -154,4 +135,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
