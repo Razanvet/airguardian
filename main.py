@@ -1,23 +1,16 @@
-# main.py
-
-from fastapi import FastAPI, HTTPException
+    from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import sqlite3
 from datetime import datetime, timedelta
 import asyncio
 
-from bot import data_queue, main as bot_main  # импортируем очередь и запуск бота
+from bot import data_queue, main as bot_main
 
 app = FastAPI()
-
-# =========================
-# ===== БАЗА ДАННЫХ ======
-# =========================
 
 conn = sqlite3.connect("data.db", check_same_thread=False)
 cursor = conn.cursor()
 
-# ----- Таблица устройств -----
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS devices (
     device_uid TEXT PRIMARY KEY,
@@ -25,7 +18,6 @@ CREATE TABLE IF NOT EXISTS devices (
 )
 """)
 
-# ----- Таблица измерений -----
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS measurements (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -44,10 +36,6 @@ ON measurements(device_uid)
 
 conn.commit()
 
-# =========================
-# ===== МОДЕЛЬ ДАННЫХ ====
-# =========================
-
 class IngestData(BaseModel):
     device_uid: str
     api_key: str
@@ -55,19 +43,9 @@ class IngestData(BaseModel):
     temperature: float
     humidity: float
 
-
-# =========================
-# ===== ЗАПУСК БОТА ======
-# =========================
-
 @app.on_event("startup")
 async def startup_event():
     asyncio.create_task(bot_main())
-
-
-# =========================
-# ===== DEBUG ENDPOINT ===
-# =========================
 
 @app.get("/debug/measurements/all")
 def debug_measurements():
@@ -87,15 +65,9 @@ def debug_measurements():
 
     return {"count": len(result), "rows": result}
 
-
-# =========================
-# ===== ПРИЁМ ДАННЫХ =====
-# =========================
-
 @app.post("/ingest")
 async def ingest(data: IngestData):
 
-    # --- Проверка устройства ---
     cursor.execute(
         "SELECT api_key FROM devices WHERE device_uid=?",
         (data.device_uid,)
@@ -111,11 +83,9 @@ async def ingest(data: IngestData):
             (data.device_uid, data.api_key)
         )
 
-    # --- Серверное время (МСК) ---
     timestamp = datetime.utcnow() + timedelta(hours=3)
     ts = timestamp.strftime("%Y-%m-%d %H:%M:%S")
 
-    # --- Сохранение в БД ---
     cursor.execute("""
         INSERT INTO measurements
         (device_uid, co2, temperature, humidity, timestamp)
@@ -130,9 +100,8 @@ async def ingest(data: IngestData):
 
     conn.commit()
 
-    # --- Отправка данных в Telegram ---
     try:
-        cabinet_number = int(data.device_uid.split("_")[1])  # cabinet_101 -> 101
+        cabinet_number = int(data.device_uid.split("_")[1])
 
         await data_queue.put({
             "cabinet": cabinet_number,
