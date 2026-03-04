@@ -1,4 +1,4 @@
-    from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import sqlite3
 from datetime import datetime, timedelta
@@ -115,3 +115,4 @@ async def ingest(data: IngestData):
         print(f"Queue error: {e}")
 
     return {"status": "ok"}
+
