@@ -1,4 +1,3 @@
-# bot.py
 import asyncio
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
@@ -9,19 +8,10 @@ BOT_TOKEN = "8552290162:AAGHM0pmC6BuCjE4NlTqG0N3pIGNZ4r4lCc"
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# ===== Состояние пользователей =====
-user_state = {}  
-# user_id -> {
-#   "cabinet": int,
-#   "notifications": bool,
-#   "last_message": Message,
-#   "alert_active": bool
-# }
+user_state = {}
 
-# ===== Очередь данных от сервера =====
 data_queue = asyncio.Queue()
 
-# ===== Клавиатуры =====
 def cabinet_selection_buttons():
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -48,7 +38,6 @@ def main_buttons(notifications_on: bool):
         ]
     )
 
-# ===== Проверка нормы =====
 def check_status(co2, temp, hum):
     co2_ok = co2 <= 800
     temp_ok = 20 <= temp <= 25
@@ -61,7 +50,6 @@ def check_status(co2, temp, hum):
         "overall": co2_ok and temp_ok and hum_ok
     }
 
-# ===== /start =====
 @dp.message(Command("start"))
 async def start_command(message: types.Message):
     user_state[message.from_user.id] = {
@@ -76,7 +64,6 @@ async def start_command(message: types.Message):
         reply_markup=cabinet_selection_buttons()
     )
 
-# ===== Выбор кабинета =====
 @dp.callback_query(lambda c: c.data.startswith("cabinet_"))
 async def select_cabinet(query: types.CallbackQuery):
     user_id = query.from_user.id
@@ -106,7 +93,6 @@ async def select_cabinet(query: types.CallbackQuery):
 
     await query.answer()
 
-# ===== Основные кнопки =====
 @dp.callback_query(lambda c: c.data in ["toggle_notifications", "change_cabinet"])
 async def handle_buttons(query: types.CallbackQuery):
     user_id = query.from_user.id
@@ -127,7 +113,6 @@ async def handle_buttons(query: types.CallbackQuery):
             reply_markup=cabinet_selection_buttons()
         )
 
-# ===== Alert цикл (без рекурсии!) =====
 async def alert_loop(user_id, cabinet):
     while user_state.get(user_id, {}).get("alert_active", False):
         try:
@@ -143,7 +128,6 @@ async def alert_loop(user_id, cabinet):
             print(f"Alert error: {e}")
             break
 
-# ===== Обновление данных =====
 async def update_cabinet_status(cabinet, co2, temperature, humidity, timestamp):
     for user_id, state in user_state.items():
         if state["cabinet"] != cabinet:
@@ -166,7 +150,6 @@ async def update_cabinet_status(cabinet, co2, temperature, humidity, timestamp):
                     reply_markup=main_buttons(state["notifications"])
                 )
 
-            # ===== Управление уведомлениями =====
             if state["notifications"]:
                 if not status["overall"]:
                     if not state["alert_active"]:
@@ -178,7 +161,6 @@ async def update_cabinet_status(cabinet, co2, temperature, humidity, timestamp):
         except Exception as e:
             print(f"Update error: {e}")
 
-# ===== Обработка очереди =====
 async def process_queue():
     while True:
         data = await data_queue.get()
@@ -191,7 +173,6 @@ async def process_queue():
             timestamp=data.get("timestamp", "—")
         )
 
-# ===== Запуск =====
 async def main():
     asyncio.create_task(process_queue())
     await dp.start_polling(bot)
